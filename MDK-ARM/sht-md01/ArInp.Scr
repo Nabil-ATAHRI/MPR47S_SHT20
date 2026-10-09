@@ -1,0 +1,23 @@
+--create sht-md01\sht-md01.lib
+sht-md01\startup_stm32f407xx.o
+sht-md01\main.o
+sht-md01\stm32f4xx_it.o
+sht-md01\stm32f4xx_hal_msp.o
+sht-md01\stm32f4xx_hal_tim.o
+sht-md01\stm32f4xx_hal_tim_ex.o
+sht-md01\stm32f4xx_hal_uart.o
+sht-md01\stm32f4xx_hal_rcc.o
+sht-md01\stm32f4xx_hal_rcc_ex.o
+sht-md01\stm32f4xx_hal_flash.o
+sht-md01\stm32f4xx_hal_flash_ex.o
+sht-md01\stm32f4xx_hal_flash_ramfunc.o
+sht-md01\stm32f4xx_hal_gpio.o
+sht-md01\stm32f4xx_hal_dma_ex.o
+sht-md01\stm32f4xx_hal_dma.o
+sht-md01\stm32f4xx_hal_pwr.o
+sht-md01\stm32f4xx_hal_pwr_ex.o
+sht-md01\stm32f4xx_hal_cortex.o
+sht-md01\stm32f4xx_hal.o
+sht-md01\stm32f4xx_hal_exti.o
+sht-md01\system_stm32f4xx.o
+sht-md01\modbusrs485.o

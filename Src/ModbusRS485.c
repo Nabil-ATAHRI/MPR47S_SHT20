@@ -1,0 +1,96 @@
+#include "ModbusRS485.h"
+#include <string.h>
+
+/* ================= UART HANDLE ================= */
+static UART_HandleTypeDef *ModbusUart;
+
+/* ================= RX BUFFER ================= */
+static uint8_t rx_buffer[256];
+
+/* ================= INIT ================= */
+void Modbus_Init(UART_HandleTypeDef *huart)
+{
+    ModbusUart = huart;
+}
+
+/* ================= CRC16 ================= */
+static uint16_t Modbus_CRC16(const uint8_t *buf, uint16_t len)
+{
+    uint16_t crc = 0xFFFF;
+
+    for(uint16_t i = 0; i < len; i++)
+    {
+        crc ^= buf[i];
+
+        for(uint8_t j = 0; j < 8; j++)
+        {
+            if(crc & 1)
+                crc = (crc >> 1) ^ 0xA001;
+            else
+                crc >>= 1;
+        }
+    }
+    return crc;
+}
+
+/* ================= SEND FRAME ================= */
+static void Modbus_SendFrame(uint8_t *frame, uint16_t len)
+{
+    HAL_UART_Transmit(ModbusUart, frame, len, HAL_MAX_DELAY);
+}
+
+/* ================= GENERIC READ ================= */
+static ModbusStatus_t Modbus_Read(uint8_t slave,
+                                   uint16_t reg,
+                                   uint16_t size,
+                                   uint8_t func,
+                                   uint16_t *data)
+{
+    uint8_t frame[8];
+
+    frame[0] = slave;
+    frame[1] = func;
+    frame[2] = reg >> 8;
+    frame[3] = reg & 0xFF;
+    frame[4] = size >> 8;
+    frame[5] = size & 0xFF;
+
+    uint16_t crc = Modbus_CRC16(frame, 6);
+    frame[6] = crc & 0xFF;
+    frame[7] = crc >> 8;
+
+    Modbus_SendFrame(frame, 8);
+
+    uint16_t expected = 5 + 2 * size;
+
+    if(HAL_UART_Receive(ModbusUart, rx_buffer, expected, 500) != HAL_OK)
+        return MODBUS_ERR_TIMEOUT;
+
+    if(rx_buffer[0] != slave || rx_buffer[1] != func)
+        return MODBUS_ERR_SLAVE;
+
+    uint16_t crc_rx = (rx_buffer[expected-1] << 8) | rx_buffer[expected-2];
+    uint16_t crc_calc = Modbus_CRC16(rx_buffer, expected-2);
+
+    if(crc_rx != crc_calc)
+        return MODBUS_ERR_CRC;
+
+    for(uint16_t i = 0; i < size; i++)
+    {
+        data[i] = (rx_buffer[3 + i*2] << 8) | rx_buffer[4 + i*2];
+    }
+
+    return MODBUS_OK;
+}
+
+/* ================= PUBLIC FUNCTIONS ================= */
+
+ModbusStatus_t Modbus_ReadHoldingRegisters(uint8_t slave, uint16_t reg, uint16_t size, uint16_t *data)
+{
+    return Modbus_Read(slave, reg, size, 0x03, data);
+}
+
+ModbusStatus_t Modbus_ReadInputRegisters(uint8_t slave, uint16_t reg, uint16_t size, uint16_t *data)
+{
+    return Modbus_Read(slave, reg, size, 0x04, data);
+}
