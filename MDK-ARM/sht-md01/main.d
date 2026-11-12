@@ -31,7 +31,7 @@ sht-md01/main.o: ..\Src\main.c ..\Inc\main.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_tim.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_tim_ex.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_uart.h \
-  ..\Inc\ModbusRS485.h ..\Inc\MPR47S.h ..\Inc\EEM375.h ..\Inc\SHT20.h \
+  ..\Inc\ModbusRS485.h ..\Inc\MPR47S.h ..\Inc\EEM375.h ..\Inc\sht20.h \
   C:\Keil_v5\ARM\ARMCLANG\Bin\..\include\stdio.h \
   C:\Keil_v5\ARM\ARMCLANG\Bin\..\include\string.h \
   C:\Keil_v5\ARM\ARMCLANG\Bin\..\include\stdarg.h

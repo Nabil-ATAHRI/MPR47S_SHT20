@@ -34,11 +34,6 @@ static uint16_t Modbus_CRC16(const uint8_t *buf, uint16_t len)
 }
 
 /* ================= SEND FRAME ================= */
-static void Modbus_SendFrame(uint8_t *frame, uint16_t len)
-{
-    HAL_UART_Transmit(ModbusUart, frame, len, HAL_MAX_DELAY);
-}
-
 /* ================= GENERIC READ ================= */
 static ModbusStatus_t Modbus_Read(uint8_t slave,
                                    uint16_t reg,
@@ -47,6 +42,9 @@ static ModbusStatus_t Modbus_Read(uint8_t slave,
                                    uint16_t *data)
 {
     uint8_t frame[8];
+    if (ModbusUart == NULL || data == NULL || slave == 0 || slave > 247 ||
+        size == 0 || size > 125)
+        return MODBUS_ERR_FRAME;
 
     frame[0] = slave;
     frame[1] = func;
@@ -59,15 +57,27 @@ static ModbusStatus_t Modbus_Read(uint8_t slave,
     frame[6] = crc & 0xFF;
     frame[7] = crc >> 8;
 
-    Modbus_SendFrame(frame, 8);
-
-    uint16_t expected = 5 + 2 * size;
-
-    if(HAL_UART_Receive(ModbusUart, rx_buffer, expected, 500) != HAL_OK)
+    __HAL_UART_FLUSH_DRREGISTER(ModbusUart);
+    if (HAL_UART_Transmit(ModbusUart, frame, 8, 100) != HAL_OK)
+        return MODBUS_ERR_TIMEOUT;
+    if(HAL_UART_Receive(ModbusUart, rx_buffer, 3, 500) != HAL_OK)
         return MODBUS_ERR_TIMEOUT;
 
-    if(rx_buffer[0] != slave || rx_buffer[1] != func)
+    if(rx_buffer[0] != slave)
         return MODBUS_ERR_SLAVE;
+    if (rx_buffer[1] == (uint8_t)(func | 0x80))
+    {
+        if (HAL_UART_Receive(ModbusUart, &rx_buffer[3], 2, 500) != HAL_OK)
+            return MODBUS_ERR_TIMEOUT;
+        uint16_t exception_crc = (rx_buffer[4] << 8) | rx_buffer[3];
+        return Modbus_CRC16(rx_buffer, 3) == exception_crc ?
+            MODBUS_ERR_EXCEPTION : MODBUS_ERR_CRC;
+    }
+    if (rx_buffer[1] != func || rx_buffer[2] != size * 2)
+        return MODBUS_ERR_FRAME;
+    uint16_t expected = 5 + 2 * size;
+    if (HAL_UART_Receive(ModbusUart, &rx_buffer[3], expected - 3, 500) != HAL_OK)
+        return MODBUS_ERR_TIMEOUT;
 
     uint16_t crc_rx = (rx_buffer[expected-1] << 8) | rx_buffer[expected-2];
     uint16_t crc_calc = Modbus_CRC16(rx_buffer, expected-2);

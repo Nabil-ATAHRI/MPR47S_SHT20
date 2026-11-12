@@ -1,5 +1,6 @@
 #include "MPR47S.h"
 #include "ModbusRS485.h"
+#include <math.h>
 
 /* ================= INIT ================= */
 void MPR47S_Init(UART_HandleTypeDef *huart)
@@ -30,8 +31,6 @@ static float F32(uint16_t *r)
 
     v.u = ((uint32_t)r[0] << 16) | r[1];
 
-    if (v.f != v.f) return 0.0f; // NaN protection
-
     return v.f;
 }
 
@@ -39,7 +38,7 @@ static float F32(uint16_t *r)
 
 uint8_t MPR47S_Read(MPR47S_t *m)
 {
-    uint16_t r[170];
+    uint16_t r[80];
 
     if(Modbus_ReadHoldingRegisters(m->id, 0x0000, 80, r) != MODBUS_OK)
         return 0;
@@ -86,5 +85,15 @@ uint8_t MPR47S_Read(MPR47S_t *m)
     m->PF2 = S32_TO_F(&r[0x004A], 0.001f);
     m->PF3 = S32_TO_F(&r[0x004C], 0.001f);
 
-    return 1;
+    return m->Freq <= 1000.0f &&
+           fabsf(m->P1) <= 1e30f && fabsf(m->P2) <= 1e30f &&
+           fabsf(m->P3) <= 1e30f && fabsf(m->P_Total) <= 1e30f &&
+           fabsf(m->Q1) <= 1e30f && fabsf(m->Q2) <= 1e30f &&
+           fabsf(m->Q3) <= 1e30f && fabsf(m->Q_Total) <= 1e30f &&
+           fabsf(m->S1) <= 1e30f && fabsf(m->S2) <= 1e30f &&
+           fabsf(m->S3) <= 1e30f && fabsf(m->S_Total) <= 1e30f &&
+           isfinite(m->P1) && isfinite(m->P2) && isfinite(m->P3) &&
+           isfinite(m->P_Total) && isfinite(m->Q1) && isfinite(m->Q2) &&
+           isfinite(m->Q3) && isfinite(m->Q_Total) && isfinite(m->S1) &&
+           isfinite(m->S2) && isfinite(m->S3) && isfinite(m->S_Total);
 }

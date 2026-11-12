@@ -2,17 +2,15 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : Main program body
-  ******************************************************************************
-  * @attention
+  * @brief          : Smart Energy Monitor - STM32F407VGT6
   *
-  * Copyright (c) 2026 STMicroelectronics.
-  * All rights reserved.
+  * USART2 : Modbus RS485 sensors, 9600 8N1
+  * USART3 : Diagnostic terminal, 9600 8N1
+  * UART4  : JSON telemetry to Raspberry Pi, 115200 8N1
   *
-  * This software is licensed under terms that can be found in the LICENSE file
-  * in the root directory of this software component.
-  * If no LICENSE file comes with this software, it is provided AS-IS.
-  *
+  * IMPORTANT:
+  * UART4 TX status OK means HAL_UART_Transmit completed successfully.
+  * It does NOT prove that the Raspberry Pi received or parsed the frame.
   ******************************************************************************
   */
 /* USER CODE END Header */
@@ -24,37 +22,51 @@
 #include "ModbusRS485.h"
 #include "MPR47S.h"
 #include "EEM375.h"
-#include "SHT20.h"
+#include "sht20.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <stdarg.h>
-
+#include <stdint.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-
+#define TXBUF_SIZE       2048U
+#define SHT_COUNT        2U
+#define MPR_COUNT        1U
+#define UART4_TX_TIMEOUT 1000U
+#define UART3_TX_TIMEOUT 1000U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
-
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
 TIM_HandleTypeDef htim6;
 
+UART_HandleTypeDef huart4;
 UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart3;
 
 /* USER CODE BEGIN PV */
+static char txbuf[TXBUF_SIZE];
+static char framebuf[TXBUF_SIZE];
 
+static uint32_t telemetry_seq = 0U;
+
+MPR47S_t mpr[MPR_COUNT];
+uint8_t mpr_id[MPR_COUNT] = {5U};
+uint8_t mpr_alive[MPR_COUNT] = {0U};
+
+SHT20_t sht[SHT_COUNT];
+uint8_t sht_id[SHT_COUNT] = {1U, 3U};
+uint8_t sht_alive[SHT_COUNT] = {0U};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -62,179 +74,369 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_USART3_UART_Init(void);
+static void MX_UART4_Init(void);
 static void MX_TIM6_Init(void);
 /* USER CODE BEGIN PFP */
+static void UART_VPrintf(UART_HandleTypeDef *uart,
+                         const char *fmt,
+                         va_list args);
+void UART_Printf(const char *fmt, ...);
+static void Frame_Printf(const char *fmt, ...);
 
+static void Raspberry_SendBootFrame(void);
+static void Raspberry_SendErrorFrame(const char *sensor, uint8_t id);
+static void Raspberry_SendSHTFrame(const SHT20_t *sensor, uint8_t read_ok);
+static void Raspberry_SendMPRFrame(const MPR47S_t *sensor, uint8_t read_ok);
 
+static void LED_On(uint16_t pin);
+static void LED_Off(uint16_t pin);
+static void LED_Blink(uint16_t pin, uint8_t n, uint16_t delay_ms);
+
+static uint8_t Modbus_Ping(uint8_t addr);
+static void Sensors_Init(void);
+static void Bus_Test_SHT(void);
+static void Bus_Test_MPR(void);
+static void SHT_ReadAll(void);
+static void MPR_ReadAll(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-/* ================= UART PRINTF ================= */
-char txbuf[256];
+
+/* ================= UART PRINTF ON USART3 ================= */
+
+static void UART_VPrintf(UART_HandleTypeDef *uart,
+                         const char *fmt,
+                         va_list args)
+{
+    int len = vsnprintf(txbuf, sizeof(txbuf), fmt, args);
+
+    if ((len < 0) || (len >= (int)sizeof(txbuf)))
+    {
+        return;
+    }
+
+    if (len > 0)
+    {
+        (void)HAL_UART_Transmit(uart,
+                                (uint8_t *)txbuf,
+                                (uint16_t)len,
+                                UART3_TX_TIMEOUT);
+    }
+}
 
 void UART_Printf(const char *fmt, ...)
 {
     va_list args;
+
     va_start(args, fmt);
-    vsnprintf(txbuf, sizeof(txbuf), fmt, args);
+    UART_VPrintf(&huart3, fmt, args);
+    va_end(args);
+}
+
+/* ================= UART4 TX + COMPLETE USART3 TRACE ================= */
+
+/*
+ * Formats a JSON frame once, prints those exact bytes on USART3,
+ * then transmits those same bytes on UART4.
+ * JSON telemetry functions must call this function.
+ */
+static void Frame_Printf(const char *fmt, ...)
+{
+    va_list args;
+    int len;
+
+    va_start(args, fmt);
+    len = vsnprintf(framebuf, sizeof(framebuf), fmt, args);
     va_end(args);
 
-    HAL_UART_Transmit(&huart3, (uint8_t*)txbuf, strlen(txbuf), 50);
+    if ((len < 0) || (len >= (int)sizeof(framebuf)))
+    {
+        UART_Printf("\r\n========== UART4 TX ==========\r\n");
+        UART_Printf("UART4 TX STATUS: NOK - JSON buffer overflow\r\n");
+        UART_Printf("==============================\r\n");
+        return;
+    }
+
+    UART_Printf("\r\n========== UART4 TX ==========\r\n");
+    UART_Printf("Length: %d bytes\r\n", len);
+    UART_Printf("COMPLETE FRAME:\r\n");
+
+    /* Print the exact frame bytes, including its final LF if present. */
+    if (len > 0)
+    {
+        (void)HAL_UART_Transmit(&huart3,
+                                (uint8_t *)framebuf,
+                                (uint16_t)len,
+                                UART3_TX_TIMEOUT);
+    }
+
+    /* Ensure the diagnostic status starts on a new terminal line. */
+    if ((len == 0) || (framebuf[len - 1] != '\n'))
+    {
+        UART_Printf("\r\n");
+    }
+
+    /* Send the same frame bytes to the Raspberry Pi. */
+    HAL_StatusTypeDef status =
+        HAL_UART_Transmit(&huart4,
+                          (uint8_t *)framebuf,
+                          (uint16_t)len,
+                          UART4_TX_TIMEOUT);
+
+    if (status == HAL_OK)
+    {
+        UART_Printf("UART4 TX STATUS: OK (HAL transmit complete)\r\n");
+    }
+    else
+    {
+        UART_Printf("UART4 TX STATUS: NOK (HAL status=%d)\r\n",
+                    (int)status);
+    }
+
+    UART_Printf("==============================\r\n");
 }
 
-/* ================= DEVICES ================= */
-#define MPR_COUNT 5
+/* ================= JSON BOOT / ERROR FRAMES ================= */
 
-MPR47S_t mpr[MPR_COUNT];
-
-uint8_t mpr_id[MPR_COUNT] = {1,2,3,4,5};
-uint8_t mpr_alive[MPR_COUNT];
-
-/* ================= INIT ================= */
-
-void MPR_Init(void)
+static void Raspberry_SendBootFrame(void)
 {
-    for(int i=0; i<MPR_COUNT; i++)
+    Frame_Printf("{\"v\":1,\"event\":\"boot\"}\n");
+}
+
+static void Raspberry_SendErrorFrame(const char *sensor, uint8_t id)
+{
+    Frame_Printf(
+        "{\"v\":1,\"sensor\":\"%s\",\"id\":%u,"
+        "\"seq\":%lu,\"uptime_ms\":%lu,"
+        "\"status\":\"error\","
+        "\"error\":\"acquisition_failed\",\"data\":null}\n",
+        sensor,
+        (unsigned int)id,
+        (unsigned long)telemetry_seq++,
+        (unsigned long)HAL_GetTick());
+}
+
+/* ================= JSON SHT20 FRAME ================= */
+
+static void Raspberry_SendSHTFrame(const SHT20_t *sensor,
+                                   uint8_t read_ok)
+{
+    if (read_ok == 0U)
+    {
+        Raspberry_SendErrorFrame("sht20", sensor->addr);
+        return;
+    }
+
+    Frame_Printf(
+        "{\"v\":1,\"sensor\":\"sht20\",\"id\":%u,"
+        "\"seq\":%lu,\"uptime_ms\":%lu,"
+        "\"status\":\"ok\",\"error\":\"\","
+        "\"data\":{\"temperature_c\":%.1f,"
+        "\"humidity_pct\":%.1f}}\n",
+        (unsigned int)sensor->addr,
+        (unsigned long)telemetry_seq++,
+        (unsigned long)HAL_GetTick(),
+        (double)sensor->temp,
+        (double)sensor->hum);
+}
+
+/* ================= JSON MPR47S FRAME ================= */
+
+static void Raspberry_SendMPRFrame(const MPR47S_t *m,
+                                   uint8_t read_ok)
+{
+    if (read_ok == 0U)
+    {
+        Raspberry_SendErrorFrame("mpr47s", m->id);
+        return;
+    }
+
+    Frame_Printf(
+        "{\"v\":1,\"sensor\":\"mpr47s\",\"id\":%u,"
+        "\"seq\":%lu,\"uptime_ms\":%lu,"
+        "\"status\":\"ok\",\"error\":\"\","
+        "\"data\":{"
+        "\"voltage_v\":[%.1f,%.1f,%.1f,%.1f],"
+        "\"line_voltage_v\":[%.1f,%.1f,%.1f],"
+        "\"current_a\":[%.3f,%.3f,%.3f,%.3f],"
+        "\"active_power_w\":[%.3f,%.3f,%.3f,%.3f],"
+        "\"reactive_power_var\":[%.3f,%.3f,%.3f,%.3f],"
+        "\"apparent_power_va\":[%.3f,%.3f,%.3f,%.3f],"
+        "\"power_factor\":[%.3f,%.3f,%.3f],"
+        "\"frequency_hz\":%.2f}}\n",
+        (unsigned int)m->id,
+        (unsigned long)telemetry_seq++,
+        (unsigned long)HAL_GetTick(),
+        (double)m->V1, (double)m->V2,
+        (double)m->V3, (double)m->V4,
+        (double)m->VL12, (double)m->VL23, (double)m->VL31,
+        (double)m->I1, (double)m->I2,
+        (double)m->I3, (double)m->IN,
+        (double)m->P1, (double)m->P2,
+        (double)m->P3, (double)m->P_Total,
+        (double)m->Q1, (double)m->Q2,
+        (double)m->Q3, (double)m->Q_Total,
+        (double)m->S1, (double)m->S2,
+        (double)m->S3, (double)m->S_Total,
+        (double)m->PF1, (double)m->PF2,
+        (double)m->PF3, (double)m->Freq);
+}
+
+/* ================= LED CONTROL ================= */
+
+#define LED_PORT     GPIOD
+#define LED_SHT_PIN  GPIO_PIN_13
+#define LED_MPR_PIN  GPIO_PIN_14
+
+static void LED_On(uint16_t pin)
+{
+    HAL_GPIO_WritePin(LED_PORT, pin, GPIO_PIN_SET);
+}
+
+static void LED_Off(uint16_t pin)
+{
+    HAL_GPIO_WritePin(LED_PORT, pin, GPIO_PIN_RESET);
+}
+
+static void LED_Blink(uint16_t pin, uint8_t n, uint16_t delay_ms)
+{
+    uint8_t i;
+
+    for (i = 0U; i < n; i++)
+    {
+        LED_On(pin);
+        HAL_Delay(delay_ms);
+        LED_Off(pin);
+        HAL_Delay(delay_ms);
+    }
+}
+
+/* ================= MODBUS PING ================= */
+
+static uint8_t Modbus_Ping(uint8_t addr)
+{
+    uint16_t dummy = 0U;
+
+    if (Modbus_ReadHoldingRegisters(addr, 0x0001U,
+                                    1U, &dummy) == MODBUS_OK)
+    {
+        return 1U;
+    }
+
+    if (Modbus_ReadInputRegisters(addr, 0x0001U,
+                                  1U, &dummy) == MODBUS_OK)
+    {
+        return 1U;
+    }
+
+    return 0U;
+}
+
+/* ================= SENSOR INITIALIZATION ================= */
+
+static void Sensors_Init(void)
+{
+    uint32_t i;
+
+    for (i = 0U; i < MPR_COUNT; i++)
     {
         mpr[i].id = mpr_id[i];
-        mpr_alive[i] = 1;
+        mpr_alive[i] = 0U;
     }
-}
 
-#define LED_PORT GPIOD
-#define LED_PIN  GPIO_PIN_14
-
-static inline void LED_On(void)
-{
-    HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_SET);
-}
-
-static inline void LED_Off(void)
-{
-    HAL_GPIO_WritePin(LED_PORT, LED_PIN, GPIO_PIN_RESET);
-}
-
-void LED_Blink(uint8_t n, uint16_t t)
-{
-    for(uint8_t i=0;i<n;i++)
+    for (i = 0U; i < SHT_COUNT; i++)
     {
-        LED_On();
-        HAL_Delay(t);
-        LED_Off();
-        HAL_Delay(t);
+        sht[i].addr = sht_id[i];
+        sht_alive[i] = 0U;
     }
 }
 
-uint8_t Modbus_Ping(uint8_t addr)
+/* ================= OPTIONAL MODBUS BUS TESTS ================= */
+/* Call these from main() only if you want to test sensor addresses. */
+
+static void Bus_Test_SHT(void)
 {
-    uint16_t dummy;
+    uint32_t i;
 
-    if(Modbus_ReadHoldingRegisters(addr, 0x0001, 1, &dummy) == MODBUS_OK)
-        return 1;
+    UART_Printf("\r\n===== SHT BUS TEST =====\r\n");
 
-    if(Modbus_ReadInputRegisters(addr, 0x0001, 1, &dummy) == MODBUS_OK)
-        return 1;
+    for (i = 0U; i < SHT_COUNT; i++)
+    {
+        UART_Printf("SHT %u -> ", (unsigned int)sht_id[i]);
+        sht_alive[i] = Modbus_Ping(sht_id[i]);
+        UART_Printf("%s\r\n", sht_alive[i] ? "OK" : "FAIL");
+        HAL_Delay(200U);
+    }
 
-    return 0;
+    UART_Printf("===== SHT TEST END =====\r\n");
 }
 
-void Bus_Test_MPR(void)
+static void Bus_Test_MPR(void)
 {
+    uint32_t i;
+
     UART_Printf("\r\n===== MPR BUS TEST =====\r\n");
 
-    for(int i=0; i<MPR_COUNT; i++)
+    for (i = 0U; i < MPR_COUNT; i++)
     {
-        uint8_t addr = mpr_id[i];
-
-        UART_Printf("MPR %d -> ", addr);
-
-        LED_Blink(addr,600);
-
-        if(Modbus_Ping(addr))
-        {
-            UART_Printf("OK\r\n");
-
-            LED_Blink(15,50);
-
-            mpr_alive[i] = 1;
-        }
-        else
-        {
-            UART_Printf("FAIL\r\n");
-
-            LED_Blink(1,1500);
-
-            mpr_alive[i] = 0;
-        }
-
-        HAL_Delay(1500);
+        UART_Printf("MPR %u -> ", (unsigned int)mpr_id[i]);
+        mpr_alive[i] = Modbus_Ping(mpr_id[i]);
+        UART_Printf("%s\r\n", mpr_alive[i] ? "OK" : "FAIL");
+        HAL_Delay(200U);
     }
 
-    UART_Printf("===== TEST END =====\r\n");
+    UART_Printf("===== MPR TEST END =====\r\n");
 }
 
-/* ================= PRINT ================= */
-	void MPR_ReadAll(void)
+/* ================= SENSOR ACQUISITION ================= */
+
+static void SHT_ReadAll(void)
 {
-    for(int i=0; i<MPR_COUNT; i++)
+    uint32_t i;
+
+    for (i = 0U; i < SHT_COUNT; i++)
     {
-        if(!mpr_alive[i])
-            continue;
+        uint8_t read_ok = SHT20_Read(&sht[i]);
 
-        if(MPR47S_Read(&mpr[i]))
+        sht_alive[i] = read_ok;
+        Raspberry_SendSHTFrame(&sht[i], read_ok);
+
+        if (read_ok != 0U)
         {
-            UART_Printf("\r\n[MPR %d]\r\n", mpr[i].id);
-
-            UART_Printf("\r\nPHASE VOLTAGE\r\n");
-            UART_Printf("V1 : %.1f V\r\n", mpr[i].V1);
-            UART_Printf("V2 : %.1f V\r\n", mpr[i].V2);
-            UART_Printf("V3 : %.1f V\r\n", mpr[i].V3);
-            UART_Printf("VN : %.1f V\r\n", mpr[i].V4);
-
-            UART_Printf("\r\nLINE VOLTAGE\r\n");
-            UART_Printf("VL12 : %.1f V\r\n", mpr[i].VL12);
-            UART_Printf("VL23 : %.1f V\r\n", mpr[i].VL23);
-            UART_Printf("VL31 : %.1f V\r\n", mpr[i].VL31);
-
-            UART_Printf("\r\nCURRENT\r\n");
-            UART_Printf("I1 : %.3f A\r\n", mpr[i].I1);
-            UART_Printf("I2 : %.3f A\r\n", mpr[i].I2);
-            UART_Printf("I3 : %.3f A\r\n", mpr[i].I3);
-            UART_Printf("IN : %.3f A\r\n", mpr[i].IN);
-
-            UART_Printf("\r\nACTIVE POWER\r\n");
-            UART_Printf("P1 : %.1f W\r\n", mpr[i].P1);
-            UART_Printf("P2 : %.1f W\r\n", mpr[i].P2);
-            UART_Printf("P3 : %.1f W\r\n", mpr[i].P3);
-            UART_Printf("PT : %.1f W\r\n", mpr[i].P_Total);
-
-            UART_Printf("\r\nREACTIVE POWER\r\n");
-            UART_Printf("Q1 : %.1f VAR\r\n", mpr[i].Q1);
-            UART_Printf("Q2 : %.1f VAR\r\n", mpr[i].Q2);
-            UART_Printf("Q3 : %.1f VAR\r\n", mpr[i].Q3);
-            UART_Printf("QT : %.1f VAR\r\n", mpr[i].Q_Total);
-
-            UART_Printf("\r\nAPPARENT POWER\r\n");
-            UART_Printf("S1 : %.1f VA\r\n", mpr[i].S1);
-            UART_Printf("S2 : %.1f VA\r\n", mpr[i].S2);
-            UART_Printf("S3 : %.1f VA\r\n", mpr[i].S3);
-            UART_Printf("ST : %.1f VA\r\n", mpr[i].S_Total);
-
-            UART_Printf("\r\nPOWER FACTOR\r\n");
-            UART_Printf("PF1 : %.3f\r\n", mpr[i].PF1);
-            UART_Printf("PF2 : %.3f\r\n", mpr[i].PF2);
-            UART_Printf("PF3 : %.3f\r\n", mpr[i].PF3);
-
-            UART_Printf("\r\nFREQUENCY\r\n");
-            UART_Printf("F : %.2f Hz\r\n", mpr[i].Freq);
+            LED_Blink(LED_SHT_PIN, 1U, 50U);
         }
         else
         {
-            UART_Printf("MPR %d COMM ERROR\r\n", mpr[i].id);
+            LED_Blink(LED_SHT_PIN, 2U, 150U);
         }
 
-        HAL_Delay(2000);
+        /* Give the shared RS485 bus time between sensor transactions. */
+        HAL_Delay(1000U);
+    }
+}
+
+static void MPR_ReadAll(void)
+{
+    uint32_t i;
+
+    for (i = 0U; i < MPR_COUNT; i++)
+    {
+        uint8_t read_ok = MPR47S_Read(&mpr[i]);
+
+        mpr_alive[i] = read_ok;
+        Raspberry_SendMPRFrame(&mpr[i], read_ok);
+
+        if (read_ok != 0U)
+        {
+            LED_Blink(LED_MPR_PIN, 1U, 50U);
+        }
+        else
+        {
+            LED_Blink(LED_MPR_PIN, 2U, 150U);
+        }
+
+        HAL_Delay(500U);
     }
 }
 
@@ -247,7 +449,6 @@ void Bus_Test_MPR(void)
 int main(void)
 {
   /* USER CODE BEGIN 1 */
-
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -256,52 +457,63 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
   /* USER CODE END Init */
 
   /* Configure the system clock */
   SystemClock_Config();
 
   /* USER CODE BEGIN SysInit */
-
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART2_UART_Init();
   MX_USART3_UART_Init();
+  MX_UART4_Init();
   MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
-  	Modbus_Init(&huart2);
 
-		MPR_Init();
+  Modbus_Init(&huart2);
+  Sensors_Init();
 
-		UART_Printf("\r\nSYSTEM READY\r\n");
+  UART_Printf("\r\n");
+  UART_Printf("========================================\r\n");
+  UART_Printf(" SMART ENERGY MONITOR - STM32F407\r\n");
+  UART_Printf(" USART2: Modbus RS485, 9600 8N1\r\n");
+  UART_Printf(" USART3: Diagnostic terminal, 9600 8N1\r\n");
+  UART_Printf(" UART4 : Raspberry Pi, 115200 8N1\r\n");
+  UART_Printf("========================================\r\n");
 
-		HAL_Delay(2000);
+  /* Sends a boot JSON frame and displays it on USART3. */
+  Raspberry_SendBootFrame();
 
-		Bus_Test_MPR();
+  /*
+   * Optional address scan. Enable these calls only if the registers
+   * used by Modbus_Ping() are valid for your specific devices.
+   */
+  /* Bus_Test_SHT(); */
+  /* Bus_Test_MPR(); */
+
+  HAL_Delay(1000U);
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-		UART_Printf("\r\n===== NEW MPR CYCLE =====\r\n");
+      SHT_ReadAll();
+      HAL_Delay(2000U);
 
-    MPR_ReadAll();
-
-    HAL_Delay(3000);
-
-    HAL_Delay(200);
-
-
+      MPR_ReadAll();
+      HAL_Delay(3000U);
+  }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
-}
+
 
 /**
   * @brief System Clock Configuration
@@ -379,6 +591,39 @@ static void MX_TIM6_Init(void)
   /* USER CODE BEGIN TIM6_Init 2 */
 
   /* USER CODE END TIM6_Init 2 */
+
+}
+
+/**
+  * @brief UART4 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_UART4_Init(void)
+{
+
+  /* USER CODE BEGIN UART4_Init 0 */
+
+  /* USER CODE END UART4_Init 0 */
+
+  /* USER CODE BEGIN UART4_Init 1 */
+
+  /* USER CODE END UART4_Init 1 */
+  huart4.Instance = UART4;
+  huart4.Init.BaudRate = 115200;
+  huart4.Init.WordLength = UART_WORDLENGTH_8B;
+  huart4.Init.StopBits = UART_STOPBITS_1;
+  huart4.Init.Parity = UART_PARITY_NONE;
+  huart4.Init.Mode = UART_MODE_TX_RX;
+  huart4.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart4.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN UART4_Init 2 */
+
+  /* USER CODE END UART4_Init 2 */
 
 }
 
@@ -463,6 +708,7 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOA_CLK_ENABLE();
   __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOD_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOD, GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
@@ -479,7 +725,7 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
-
+/* Add project-specific callbacks here if required. */
 /* USER CODE END 4 */
 
 /**

@@ -1,4 +1,4 @@
-#include "SHT20.h"
+#include "sht20.h"
 #include "ModbusRS485.h"
 
 static uint8_t SHT20_ReadReg(uint8_t id, uint16_t addr, uint16_t *buf)
@@ -28,10 +28,16 @@ uint8_t SHT20_Read(SHT20_t *dev)
         return 0;
     }
 
-    /* conversion sécurisée */
+    /* conversion sï¿½curisï¿½e */
     dev->temp = (int16_t)reg[0] / 10.0f;
     dev->hum  = (int16_t)reg[1] / 10.0f;
 
+    if (dev->temp < -40.0f || dev->temp > 125.0f ||
+        dev->hum < 0.0f || dev->hum > 100.0f)
+    {
+        dev->ok = 0;
+        return 0;
+    }
     dev->ok = 1;
     return 1;
 }

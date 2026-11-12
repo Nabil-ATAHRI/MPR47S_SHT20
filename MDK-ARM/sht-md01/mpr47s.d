@@ -1,4 +1,4 @@
-sht-md01/mpr47s.o: MPR47S.c MPR47S.h \
+sht-md01/mpr47s.o: ..\Src\MPR47S.c ..\Inc\MPR47S.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal.h \
   ..\Inc\stm32f4xx_hal_conf.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_rcc.h \
@@ -30,4 +30,5 @@ sht-md01/mpr47s.o: MPR47S.c MPR47S.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_pwr_ex.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_tim.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_tim_ex.h \
-  ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_uart.h ModbusRS485.h
+  ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_uart.h \
+  ..\Inc\ModbusRS485.h C:\Keil_v5\ARM\ARMCLANG\Bin\..\include\math.h

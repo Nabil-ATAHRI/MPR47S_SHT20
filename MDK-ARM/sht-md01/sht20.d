@@ -1,4 +1,4 @@
-sht-md01/sht20.o: ..\Src\sht20.c ..\Inc\SHT20.h \
+sht-md01/sht20.o: ..\Src\sht20.c ..\Inc\sht20.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal.h \
   ..\Inc\stm32f4xx_hal_conf.h \
   ..\Drivers\STM32F4xx_HAL_Driver\Inc\stm32f4xx_hal_rcc.h \

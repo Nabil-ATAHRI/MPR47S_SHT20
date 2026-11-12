@@ -9,7 +9,9 @@ typedef enum {
     MODBUS_OK = 0,
     MODBUS_ERR_TIMEOUT = -1,
     MODBUS_ERR_SLAVE = -2,
-    MODBUS_ERR_CRC = -3
+    MODBUS_ERR_CRC = -3,
+    MODBUS_ERR_FRAME = -4,
+    MODBUS_ERR_EXCEPTION = -5
 } ModbusStatus_t;
 
 /* ================= INIT ================= */
