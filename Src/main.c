@@ -6,10 +6,10 @@
   *
   * USART2 : Modbus RS485 sensors, 9600 8N1
   * USART3 : Diagnostic terminal, 9600 8N1
-  * UART4  : JSON telemetry to Raspberry Pi, 115200 8N1
+  * USART6: JSON telemetry to Raspberry Pi, 115200 8N1
   *
   * IMPORTANT:
-  * UART4 TX status OK means HAL_UART_Transmit completed successfully.
+  * USART6 TX status OK means HAL_UART_Transmit completed successfully.
   * It does NOT prove that the Raspberry Pi received or parsed the frame.
   ******************************************************************************
   */
@@ -39,7 +39,7 @@
 #define TXBUF_SIZE       2048U
 #define SHT_COUNT        2U
 #define MPR_COUNT        1U
-#define UART4_TX_TIMEOUT 1000U
+#define USART6_TX_TIMEOUT 1000U
 #define UART3_TX_TIMEOUT 1000U
 /* USER CODE END PD */
 
@@ -50,9 +50,9 @@
 /* Private variables ---------------------------------------------------------*/
 TIM_HandleTypeDef htim6;
 
-UART_HandleTypeDef huart4;
 UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart3;
+UART_HandleTypeDef huart6;
 
 /* USER CODE BEGIN PV */
 static char txbuf[TXBUF_SIZE];
@@ -74,8 +74,8 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_USART3_UART_Init(void);
-static void MX_UART4_Init(void);
 static void MX_TIM6_Init(void);
+static void MX_USART6_UART_Init(void);
 /* USER CODE BEGIN PFP */
 static void UART_VPrintf(UART_HandleTypeDef *uart,
                          const char *fmt,
@@ -158,11 +158,11 @@ void UART_Printf(const char *fmt, ...)
     va_end(args);
 }
 
-/* ================= UART4 TX + COMPLETE USART3 TRACE ================= */
+/* ================= USART6 TX + COMPLETE USART3 TRACE ================= */
 
 /*
  * Formats a JSON frame once, prints those exact bytes on USART3,
- * then transmits those same bytes on UART4.
+ * then transmits those same bytes on USART6.
  * JSON telemetry functions must call this function.
  */
 static void Frame_Printf(const char *fmt, ...)
@@ -176,13 +176,13 @@ static void Frame_Printf(const char *fmt, ...)
 
     if ((len < 0) || (len >= (int)sizeof(framebuf)))
     {
-        UART_Printf("\r\n========== UART4 TX ==========\r\n");
-        UART_Printf("UART4 TX STATUS: NOK - JSON buffer overflow\r\n");
+        UART_Printf("\r\n========== USART6 TX ==========\r\n");
+        UART_Printf("USART6 TX STATUS: NOK - JSON buffer overflow\r\n");
         UART_Printf("==============================\r\n");
         return;
     }
 
-    UART_Printf("\r\n========== UART4 TX ==========\r\n");
+    UART_Printf("\r\n========== USART6 TX ==========\r\n");
     UART_Printf("Length: %d bytes\r\n", len);
     UART_Printf("COMPLETE FRAME:\r\n");
 
@@ -203,18 +203,18 @@ static void Frame_Printf(const char *fmt, ...)
 
     /* Send the same frame bytes to the Raspberry Pi. */
     HAL_StatusTypeDef status =
-        HAL_UART_Transmit(&huart4,
+        HAL_UART_Transmit(&huart6,
                           (uint8_t *)framebuf,
                           (uint16_t)len,
-                          UART4_TX_TIMEOUT);
+                          USART6_TX_TIMEOUT);
 
     if (status == HAL_OK)
     {
-        UART_Printf("UART4 TX STATUS: OK (HAL transmit complete)\r\n");
+        UART_Printf("USART6 TX STATUS: OK (HAL transmit complete)\r\n");
     }
     else
     {
-        UART_Printf("UART4 TX STATUS: NOK (HAL status=%d)\r\n",
+        UART_Printf("USART6 TX STATUS: NOK (HAL status=%d)\r\n",
                     (int)status);
     }
 
@@ -501,7 +501,7 @@ int main(void)
   MX_GPIO_Init();
   MX_USART2_UART_Init();
   MX_USART3_UART_Init();
-  MX_UART4_Init();
+  MX_USART6_UART_Init();
   MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
 
@@ -513,7 +513,7 @@ int main(void)
   UART_Printf(" SMART ENERGY MONITOR - STM32F407\r\n");
   UART_Printf(" USART2: Modbus RS485, 9600 8N1\r\n");
   UART_Printf(" USART3: Diagnostic terminal, 9600 8N1\r\n");
-  UART_Printf(" UART4 : Raspberry Pi, 115200 8N1\r\n");
+  UART_Printf(" USART6: Raspberry Pi, 115200 8N1\r\n");
   UART_Printf("========================================\r\n");
 
   /* Sends a boot JSON frame and displays it on USART3. */
@@ -545,7 +545,6 @@ int main(void)
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
-
 
 /**
   * @brief System Clock Configuration
@@ -627,39 +626,6 @@ static void MX_TIM6_Init(void)
 }
 
 /**
-  * @brief UART4 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_UART4_Init(void)
-{
-
-  /* USER CODE BEGIN UART4_Init 0 */
-
-  /* USER CODE END UART4_Init 0 */
-
-  /* USER CODE BEGIN UART4_Init 1 */
-
-  /* USER CODE END UART4_Init 1 */
-  huart4.Instance = UART4;
-  huart4.Init.BaudRate = 115200;
-  huart4.Init.WordLength = UART_WORDLENGTH_8B;
-  huart4.Init.StopBits = UART_STOPBITS_1;
-  huart4.Init.Parity = UART_PARITY_NONE;
-  huart4.Init.Mode = UART_MODE_TX_RX;
-  huart4.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart4.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart4) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN UART4_Init 2 */
-
-  /* USER CODE END UART4_Init 2 */
-
-}
-
-/**
   * @brief USART2 Initialization Function
   * @param None
   * @retval None
@@ -722,6 +688,39 @@ static void MX_USART3_UART_Init(void)
   /* USER CODE BEGIN USART3_Init 2 */
 
   /* USER CODE END USART3_Init 2 */
+
+}
+
+/**
+  * @brief USART6 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART6_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART6_Init 0 */
+
+  /* USER CODE END USART6_Init 0 */
+
+  /* USER CODE BEGIN USART6_Init 1 */
+
+  /* USER CODE END USART6_Init 1 */
+  huart6.Instance = USART6;
+  huart6.Init.BaudRate = 115200;
+  huart6.Init.WordLength = UART_WORDLENGTH_8B;
+  huart6.Init.StopBits = UART_STOPBITS_1;
+  huart6.Init.Parity = UART_PARITY_NONE;
+  huart6.Init.Mode = UART_MODE_TX_RX;
+  huart6.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart6.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart6) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART6_Init 2 */
+
+  /* USER CODE END USART6_Init 2 */
 
 }
 
