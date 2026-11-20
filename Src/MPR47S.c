@@ -39,8 +39,11 @@ static float F32(uint16_t *r)
 uint8_t MPR47S_Read(MPR47S_t *m)
 {
     uint16_t r[80];
+    ModbusStatus_t status;
 
-    if(Modbus_ReadHoldingRegisters(m->id, 0x0000, 80, r) != MODBUS_OK)
+    status = Modbus_ReadHoldingRegisters(m->id, 0x0000, 80, r);
+    m->last_status = (int)status;
+    if(status != MODBUS_OK)
         return 0;
 
     /* ===== VOLTAGE ===== */

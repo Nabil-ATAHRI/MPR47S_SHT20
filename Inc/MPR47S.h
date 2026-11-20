@@ -20,6 +20,7 @@ typedef struct
     float S1, S2, S3, S_Total;
 
     float PF1, PF2, PF3;
+    int last_status;
 
 } MPR47S_t;
 

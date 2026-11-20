@@ -3,9 +3,9 @@
 <title>Static Call Graph - [sht-md01\sht-md01.axf]</title></head>
 <body><HR>
 <H1>Static Call Graph for image sht-md01\sht-md01.axf</H1><HR>
-<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 6190004: Last Updated: Fri Oct 23 22:04:01 2026
+<BR><P>#&#060CALLGRAPH&#062# ARM Linker, 6190004: Last Updated: Fri Nov 20 23:46:45 2026
 <BR><P>
-<H3>Maximum Stack Usage =        792 bytes + Unknown(Functions without stacksize, Cycles, Untraceable Function Pointers)</H3><H3>
+<H3>Maximum Stack Usage =        784 bytes + Unknown(Functions without stacksize, Cycles, Untraceable Function Pointers)</H3><H3>
 Call chain for Maximum Stack Depth:</H3>
 __rt_entry_main &rArr; main &rArr; MPR47S_Read &rArr; Modbus_ReadHoldingRegisters &rArr; Modbus_Read &rArr; HAL_UART_Receive
 <P>
@@ -410,7 +410,7 @@ Global Symbols
 <P><STRONG><a name="[112]"></a>__rt_entry_postsh_1</STRONG> (Thumb, 0 bytes, Stack size unknown bytes, __rtentry2.o(.ARM.Collect$$rtentry$$00000009))
 
 <P><STRONG><a name="[91]"></a>__rt_entry_main</STRONG> (Thumb, 0 bytes, Stack size unknown bytes, __rtentry2.o(.ARM.Collect$$rtentry$$0000000D))
-<BR><BR>[Stack]<UL><LI>Max Depth = 792 + Unknown Stack Size
+<BR><BR>[Stack]<UL><LI>Max Depth = 784 + Unknown Stack Size
 <LI>Call Chain = __rt_entry_main &rArr; main &rArr; MPR47S_Read &rArr; Modbus_ReadHoldingRegisters &rArr; Modbus_Read &rArr; HAL_UART_Receive
 </UL>
 <BR>[Calls]<UL><LI><a href="#[92]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;main
@@ -1288,7 +1288,7 @@ Global Symbols
 </UL>
 <BR>[Address Reference Count : 1]<UL><LI> startup_stm32f407xx.o(RESET)
 </UL>
-<P><STRONG><a name="[d8]"></a>MPR47S_Read</STRONG> (Thumb, 1136 bytes, Stack size 248 bytes, mpr47s.o(.text.MPR47S_Read))
+<P><STRONG><a name="[d8]"></a>MPR47S_Read</STRONG> (Thumb, 1140 bytes, Stack size 248 bytes, mpr47s.o(.text.MPR47S_Read))
 <BR><BR>[Stack]<UL><LI>Max Depth = 344<LI>Call Chain = MPR47S_Read &rArr; Modbus_ReadHoldingRegisters &rArr; Modbus_Read &rArr; HAL_UART_Receive
 </UL>
 <BR>[Calls]<UL><LI><a href="#[d9]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;Modbus_ReadHoldingRegisters
@@ -1333,7 +1333,7 @@ Global Symbols
 <P><STRONG><a name="[8]"></a>PendSV_Handler</STRONG> (Thumb, 2 bytes, Stack size 0 bytes, stm32f4xx_it.o(.text.PendSV_Handler))
 <BR>[Address Reference Count : 1]<UL><LI> startup_stm32f407xx.o(RESET)
 </UL>
-<P><STRONG><a name="[dd]"></a>SHT20_Read</STRONG> (Thumb, 196 bytes, Stack size 24 bytes, sht20.o(.text.SHT20_Read))
+<P><STRONG><a name="[dd]"></a>SHT20_Read</STRONG> (Thumb, 200 bytes, Stack size 24 bytes, sht20.o(.text.SHT20_Read))
 <BR><BR>[Stack]<UL><LI>Max Depth = 120<LI>Call Chain = SHT20_Read &rArr; Modbus_ReadInputRegisters &rArr; Modbus_Read &rArr; HAL_UART_Receive
 </UL>
 <BR>[Calls]<UL><LI><a href="#[bb]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;HAL_Delay
@@ -1384,8 +1384,8 @@ Global Symbols
 </UL>
 <BR>[Address Reference Count : 1]<UL><LI> startup_stm32f407xx.o(RESET)
 </UL>
-<P><STRONG><a name="[92]"></a>main</STRONG> (Thumb, 1804 bytes, Stack size 448 bytes, main.o(.text.main))
-<BR><BR>[Stack]<UL><LI>Max Depth = 792 + Unknown Stack Size
+<P><STRONG><a name="[92]"></a>main</STRONG> (Thumb, 1968 bytes, Stack size 440 bytes, main.o(.text.main))
+<BR><BR>[Stack]<UL><LI>Max Depth = 784 + Unknown Stack Size
 <LI>Call Chain = main &rArr; MPR47S_Read &rArr; Modbus_ReadHoldingRegisters &rArr; Modbus_Read &rArr; HAL_UART_Receive
 </UL>
 <BR>[Calls]<UL><LI><a href="#[d8]">&gt;&gt;</a>&nbsp;&nbsp;&nbsp;MPR47S_Read

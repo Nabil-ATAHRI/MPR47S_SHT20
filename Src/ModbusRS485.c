@@ -59,7 +59,7 @@ static ModbusStatus_t Modbus_Read(uint8_t slave,
 
     __HAL_UART_FLUSH_DRREGISTER(ModbusUart);
     if (HAL_UART_Transmit(ModbusUart, frame, 8, 100) != HAL_OK)
-        return MODBUS_ERR_TIMEOUT;
+        return MODBUS_ERR_TX;
     if(HAL_UART_Receive(ModbusUart, rx_buffer, 3, 500) != HAL_OK)
         return MODBUS_ERR_TIMEOUT;
 

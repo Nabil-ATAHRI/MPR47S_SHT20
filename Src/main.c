@@ -82,6 +82,7 @@ static void UART_VPrintf(UART_HandleTypeDef *uart,
                          va_list args);
 void UART_Printf(const char *fmt, ...);
 static void Frame_Printf(const char *fmt, ...);
+static const char *Modbus_StatusName(int status);
 
 static void Raspberry_SendBootFrame(void);
 static void Raspberry_SendErrorFrame(const char *sensor, uint8_t id);
@@ -102,6 +103,29 @@ static void MPR_ReadAll(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+
+static const char *Modbus_StatusName(int status)
+{
+    switch (status)
+    {
+    case 0:
+        return "OK";
+    case -1:
+        return "TIMEOUT";
+    case -2:
+        return "SLAVE";
+    case -3:
+        return "CRC";
+    case -4:
+        return "FRAME";
+    case -5:
+        return "EXCEPTION";
+    case -6:
+        return "TX_ERROR";
+    default:
+        return "UNKNOWN";
+    }
+}
 
 /* ================= UART PRINTF ON USART3 ================= */
 
@@ -408,6 +432,10 @@ static void SHT_ReadAll(void)
         }
         else
         {
+            UART_Printf("SHT20 id=%u Modbus=%s (%d)\r\n",
+                        (unsigned int)sht[i].addr,
+                        Modbus_StatusName(sht[i].last_status),
+                        sht[i].last_status);
             LED_Blink(LED_SHT_PIN, 2U, 150U);
         }
 
@@ -433,6 +461,10 @@ static void MPR_ReadAll(void)
         }
         else
         {
+            UART_Printf("MPR47S id=%u Modbus=%s (%d)\r\n",
+                        (unsigned int)mpr[i].id,
+                        Modbus_StatusName(mpr[i].last_status),
+                        mpr[i].last_status);
             LED_Blink(LED_MPR_PIN, 2U, 150U);
         }
 

@@ -10,6 +10,7 @@ typedef struct
     float temp;
     float hum;
     uint8_t ok;
+    int last_status;
 } SHT20_t;
 
 void SHT20_Init(void);

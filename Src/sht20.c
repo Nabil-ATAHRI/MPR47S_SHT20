@@ -1,16 +1,19 @@
 #include "sht20.h"
 #include "ModbusRS485.h"
 
-static uint8_t SHT20_ReadReg(uint8_t id, uint16_t addr, uint16_t *buf)
+static ModbusStatus_t SHT20_ReadReg(uint8_t id, uint16_t addr, uint16_t *buf)
 {
+    ModbusStatus_t status = MODBUS_ERR_TIMEOUT;
+
     for(int i=0;i<3;i++)
     {
-        if(Modbus_ReadInputRegisters(id, addr, 2, buf) == MODBUS_OK)
-            return 1;
+        status = Modbus_ReadInputRegisters(id, addr, 2, buf);
+        if(status == MODBUS_OK)
+            return status;
 
         HAL_Delay(20);
     }
-    return 0;
+    return status;
 }
 
 void SHT20_Init(void)
@@ -21,8 +24,10 @@ void SHT20_Init(void)
 uint8_t SHT20_Read(SHT20_t *dev)
 {
     uint16_t reg[2];
+    ModbusStatus_t status = SHT20_ReadReg(dev->addr, 0x0001, reg);
+    dev->last_status = (int)status;
 
-    if(!SHT20_ReadReg(dev->addr, 0x0001, reg))
+    if(status != MODBUS_OK)
     {
         dev->ok = 0;
         return 0;
