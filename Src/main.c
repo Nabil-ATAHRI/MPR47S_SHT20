@@ -6,10 +6,10 @@
   *
   * USART2 : Modbus RS485 sensors, 9600 8N1
   * USART3 : Diagnostic terminal, 9600 8N1
-  * USART6: JSON telemetry to Raspberry Pi, 115200 8N1
+  * UART4 : JSON telemetry to Raspberry Pi, 115200 8N1
   *
   * IMPORTANT:
-  * USART6 TX status OK means HAL_UART_Transmit completed successfully.
+  * UART4 TX status OK means the DMA transmission completed successfully.
   * It does NOT prove that the Raspberry Pi received or parsed the frame.
   ******************************************************************************
   */
@@ -39,8 +39,9 @@
 #define TXBUF_SIZE       2048U
 #define SHT_COUNT        2U
 #define MPR_COUNT        1U
-#define USART6_TX_TIMEOUT 1000U
 #define UART3_TX_TIMEOUT 1000U
+#define UART4_TX_TIMEOUT  1000U
+#define UART4_RX_BUFFER_SIZE 256U
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -50,13 +51,16 @@
 /* Private variables ---------------------------------------------------------*/
 TIM_HandleTypeDef htim6;
 
+UART_HandleTypeDef huart4;
 UART_HandleTypeDef huart2;
 UART_HandleTypeDef huart3;
-UART_HandleTypeDef huart6;
+DMA_HandleTypeDef hdma_uart4_rx;
+DMA_HandleTypeDef hdma_uart4_tx;
 
 /* USER CODE BEGIN PV */
 static char txbuf[TXBUF_SIZE];
 static char framebuf[TXBUF_SIZE];
+static uint8_t uart4_rx_buffer[UART4_RX_BUFFER_SIZE];
 
 static uint32_t telemetry_seq = 0U;
 
@@ -72,14 +76,19 @@ uint8_t sht_alive[SHT_COUNT] = {0U};
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
 static void MX_USART2_UART_Init(void);
-static void MX_USART3_UART_Init(void);
 static void MX_TIM6_Init(void);
-static void MX_USART6_UART_Init(void);
+static void MX_UART4_Init(void);
+static void MX_USART3_UART_Init(void);
 /* USER CODE BEGIN PFP */
 static void UART_VPrintf(UART_HandleTypeDef *uart,
                          const char *fmt,
                          va_list args);
+static HAL_StatusTypeDef UART_TransmitDMA(UART_HandleTypeDef *uart,
+                                          uint8_t *data,
+                                          uint16_t size,
+                                          uint32_t timeout);
 void UART_Printf(const char *fmt, ...);
 static void Frame_Printf(const char *fmt, ...);
 static const char *Modbus_StatusName(int status);
@@ -93,10 +102,7 @@ static void LED_On(uint16_t pin);
 static void LED_Off(uint16_t pin);
 static void LED_Blink(uint16_t pin, uint8_t n, uint16_t delay_ms);
 
-static uint8_t Modbus_Ping(uint8_t addr);
 static void Sensors_Init(void);
-static void Bus_Test_SHT(void);
-static void Bus_Test_MPR(void);
 static void SHT_ReadAll(void);
 static void MPR_ReadAll(void);
 /* USER CODE END PFP */
@@ -127,8 +133,6 @@ static const char *Modbus_StatusName(int status)
     }
 }
 
-/* ================= UART PRINTF ON USART3 ================= */
-
 static void UART_VPrintf(UART_HandleTypeDef *uart,
                          const char *fmt,
                          va_list args)
@@ -137,15 +141,15 @@ static void UART_VPrintf(UART_HandleTypeDef *uart,
 
     if ((len < 0) || (len >= (int)sizeof(txbuf)))
     {
+        Error_Handler();
         return;
     }
 
-    if (len > 0)
+    if ((len > 0) &&
+        (HAL_UART_Transmit(uart, (uint8_t *)txbuf, (uint16_t)len,
+                           UART3_TX_TIMEOUT) != HAL_OK))
     {
-        (void)HAL_UART_Transmit(uart,
-                                (uint8_t *)txbuf,
-                                (uint16_t)len,
-                                UART3_TX_TIMEOUT);
+        Error_Handler();
     }
 }
 
@@ -158,17 +162,39 @@ void UART_Printf(const char *fmt, ...)
     va_end(args);
 }
 
-/* ================= USART6 TX + COMPLETE USART3 TRACE ================= */
+static HAL_StatusTypeDef UART_TransmitDMA(UART_HandleTypeDef *uart,
+                                          uint8_t *data,
+                                          uint16_t size,
+                                          uint32_t timeout)
+{
+    HAL_StatusTypeDef status = HAL_UART_Transmit_DMA(uart, data, size);
+    uint32_t start_tick;
 
-/*
- * Formats a JSON frame once, prints those exact bytes on USART3,
- * then transmits those same bytes on USART6.
- * JSON telemetry functions must call this function.
- */
+    if (status != HAL_OK)
+    {
+        return status;
+    }
+
+    start_tick = HAL_GetTick();
+    while (uart->gState != HAL_UART_STATE_READY)
+    {
+        if ((HAL_GetTick() - start_tick) >= timeout)
+        {
+            (void)HAL_UART_AbortTransmit(uart);
+            return HAL_TIMEOUT;
+        }
+    }
+
+    return HAL_OK;
+}
+
+/* ================= UART4 JSON TRANSMISSION ================= */
+
 static void Frame_Printf(const char *fmt, ...)
 {
     va_list args;
     int len;
+    uint16_t terminal_len;
 
     va_start(args, fmt);
     len = vsnprintf(framebuf, sizeof(framebuf), fmt, args);
@@ -176,49 +202,37 @@ static void Frame_Printf(const char *fmt, ...)
 
     if ((len < 0) || (len >= (int)sizeof(framebuf)))
     {
-        UART_Printf("\r\n========== USART6 TX ==========\r\n");
-        UART_Printf("USART6 TX STATUS: NOK - JSON buffer overflow\r\n");
-        UART_Printf("==============================\r\n");
+        Error_Handler();
         return;
     }
 
-    UART_Printf("\r\n========== USART6 TX ==========\r\n");
-    UART_Printf("Length: %d bytes\r\n", len);
-    UART_Printf("COMPLETE FRAME:\r\n");
-
-    /* Print the exact frame bytes, including its final LF if present. */
-    if (len > 0)
+    UART_Printf("UART4 TX (%d bytes):\r\n", len);
+    terminal_len = (uint16_t)len;
+    if ((terminal_len > 0U) && (framebuf[terminal_len - 1U] == '\n'))
     {
-        (void)HAL_UART_Transmit(&huart3,
-                                (uint8_t *)framebuf,
-                                (uint16_t)len,
-                                UART3_TX_TIMEOUT);
+        terminal_len--;
     }
-
-    /* Ensure the diagnostic status starts on a new terminal line. */
-    if ((len == 0) || (framebuf[len - 1] != '\n'))
+    if (terminal_len > 0U)
     {
-        UART_Printf("\r\n");
+        if (HAL_UART_Transmit(&huart3, (uint8_t *)framebuf,
+                              terminal_len, UART3_TX_TIMEOUT) != HAL_OK)
+        {
+            Error_Handler();
+        }
     }
+    UART_Printf("\r\n");
 
-    /* Send the same frame bytes to the Raspberry Pi. */
     HAL_StatusTypeDef status =
-        HAL_UART_Transmit(&huart6,
-                          (uint8_t *)framebuf,
-                          (uint16_t)len,
-                          USART6_TX_TIMEOUT);
+        UART_TransmitDMA(&huart4,
+                         (uint8_t *)framebuf,
+                         (uint16_t)len,
+                         UART4_TX_TIMEOUT);
 
-    if (status == HAL_OK)
+    if (status != HAL_OK)
     {
-        UART_Printf("USART6 TX STATUS: OK (HAL transmit complete)\r\n");
+        UART_Printf("UART4 DMA TX failed (HAL status=%d)\r\n", (int)status);
+        Error_Handler();
     }
-    else
-    {
-        UART_Printf("USART6 TX STATUS: NOK (HAL status=%d)\r\n",
-                    (int)status);
-    }
-
-    UART_Printf("==============================\r\n");
 }
 
 /* ================= JSON BOOT / ERROR FRAMES ================= */
@@ -336,27 +350,6 @@ static void LED_Blink(uint16_t pin, uint8_t n, uint16_t delay_ms)
     }
 }
 
-/* ================= MODBUS PING ================= */
-
-static uint8_t Modbus_Ping(uint8_t addr)
-{
-    uint16_t dummy = 0U;
-
-    if (Modbus_ReadHoldingRegisters(addr, 0x0001U,
-                                    1U, &dummy) == MODBUS_OK)
-    {
-        return 1U;
-    }
-
-    if (Modbus_ReadInputRegisters(addr, 0x0001U,
-                                  1U, &dummy) == MODBUS_OK)
-    {
-        return 1U;
-    }
-
-    return 0U;
-}
-
 /* ================= SENSOR INITIALIZATION ================= */
 
 static void Sensors_Init(void)
@@ -374,43 +367,6 @@ static void Sensors_Init(void)
         sht[i].addr = sht_id[i];
         sht_alive[i] = 0U;
     }
-}
-
-/* ================= OPTIONAL MODBUS BUS TESTS ================= */
-/* Call these from main() only if you want to test sensor addresses. */
-
-static void Bus_Test_SHT(void)
-{
-    uint32_t i;
-
-    UART_Printf("\r\n===== SHT BUS TEST =====\r\n");
-
-    for (i = 0U; i < SHT_COUNT; i++)
-    {
-        UART_Printf("SHT %u -> ", (unsigned int)sht_id[i]);
-        sht_alive[i] = Modbus_Ping(sht_id[i]);
-        UART_Printf("%s\r\n", sht_alive[i] ? "OK" : "FAIL");
-        HAL_Delay(200U);
-    }
-
-    UART_Printf("===== SHT TEST END =====\r\n");
-}
-
-static void Bus_Test_MPR(void)
-{
-    uint32_t i;
-
-    UART_Printf("\r\n===== MPR BUS TEST =====\r\n");
-
-    for (i = 0U; i < MPR_COUNT; i++)
-    {
-        UART_Printf("MPR %u -> ", (unsigned int)mpr_id[i]);
-        mpr_alive[i] = Modbus_Ping(mpr_id[i]);
-        UART_Printf("%s\r\n", mpr_alive[i] ? "OK" : "FAIL");
-        HAL_Delay(200U);
-    }
-
-    UART_Printf("===== MPR TEST END =====\r\n");
 }
 
 /* ================= SENSOR ACQUISITION ================= */
@@ -499,32 +455,25 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  MX_DMA_Init();
   MX_USART2_UART_Init();
-  MX_USART3_UART_Init();
-  MX_USART6_UART_Init();
   MX_TIM6_Init();
+  MX_UART4_Init();
+  MX_USART3_UART_Init();
   /* USER CODE BEGIN 2 */
 
   Modbus_Init(&huart2);
   Sensors_Init();
 
-  UART_Printf("\r\n");
-  UART_Printf("========================================\r\n");
+  UART_Printf("\r\n========================================\r\n");
   UART_Printf(" SMART ENERGY MONITOR - STM32F407\r\n");
   UART_Printf(" USART2: Modbus RS485, 9600 8N1\r\n");
   UART_Printf(" USART3: Diagnostic terminal, 9600 8N1\r\n");
-  UART_Printf(" USART6: Raspberry Pi, 115200 8N1\r\n");
+  UART_Printf(" UART4: Raspberry Pi, 115200 8N1 (DMA)\r\n");
   UART_Printf("========================================\r\n");
 
-  /* Sends a boot JSON frame and displays it on USART3. */
+  /* Send a JSON boot frame to the Raspberry Pi. */
   Raspberry_SendBootFrame();
-
-  /*
-   * Optional address scan. Enable these calls only if the registers
-   * used by Modbus_Ping() are valid for your specific devices.
-   */
-  /* Bus_Test_SHT(); */
-  /* Bus_Test_MPR(); */
 
   HAL_Delay(1000U);
 
@@ -543,8 +492,8 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-  }
   /* USER CODE END 3 */
+}
 
 /**
   * @brief System Clock Configuration
@@ -626,6 +575,39 @@ static void MX_TIM6_Init(void)
 }
 
 /**
+  * @brief UART4 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_UART4_Init(void)
+{
+
+  /* USER CODE BEGIN UART4_Init 0 */
+
+  /* USER CODE END UART4_Init 0 */
+
+  /* USER CODE BEGIN UART4_Init 1 */
+
+  /* USER CODE END UART4_Init 1 */
+  huart4.Instance = UART4;
+  huart4.Init.BaudRate = 115200;
+  huart4.Init.WordLength = UART_WORDLENGTH_8B;
+  huart4.Init.StopBits = UART_STOPBITS_1;
+  huart4.Init.Parity = UART_PARITY_NONE;
+  huart4.Init.Mode = UART_MODE_TX_RX;
+  huart4.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart4.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN UART4_Init 2 */
+
+  /* USER CODE END UART4_Init 2 */
+
+}
+
+/**
   * @brief USART2 Initialization Function
   * @param None
   * @retval None
@@ -692,35 +674,21 @@ static void MX_USART3_UART_Init(void)
 }
 
 /**
-  * @brief USART6 Initialization Function
-  * @param None
-  * @retval None
+  * Enable DMA controller clock
   */
-static void MX_USART6_UART_Init(void)
+static void MX_DMA_Init(void)
 {
 
-  /* USER CODE BEGIN USART6_Init 0 */
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
 
-  /* USER CODE END USART6_Init 0 */
-
-  /* USER CODE BEGIN USART6_Init 1 */
-
-  /* USER CODE END USART6_Init 1 */
-  huart6.Instance = USART6;
-  huart6.Init.BaudRate = 115200;
-  huart6.Init.WordLength = UART_WORDLENGTH_8B;
-  huart6.Init.StopBits = UART_STOPBITS_1;
-  huart6.Init.Parity = UART_PARITY_NONE;
-  huart6.Init.Mode = UART_MODE_TX_RX;
-  huart6.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart6.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart6) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN USART6_Init 2 */
-
-  /* USER CODE END USART6_Init 2 */
+  /* DMA interrupt init */
+  /* DMA1_Stream2_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream2_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream2_IRQn);
+  /* DMA1_Stream4_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream4_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream4_IRQn);
 
 }
 
